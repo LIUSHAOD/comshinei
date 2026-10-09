@@ -1,0 +1,56 @@
+[project]
+name = "comshinei-backend"
+version = "0.2.0"
+description = "Comshinei 室内设计 Agent 后端"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "sqlalchemy>=2.0.0",
+    "pymysql>=1.1.0",
+    "alembic>=1.13.0",
+    "redis>=5.0.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "torch>=2.2",
+    "langgraph>=1.2.14",
+    "qdrant-client>=1.19.1",
+    "sentence-transformers>=6.1.0",
+    "pillow>=12.3.0",
+    "openai>=3.26.1",
+    "langfuse>=4.17.0",
+    "apscheduler>=3.11.3",
+]
+
+[dependency-groups]
+dev = [
+    "fakeredis>=2.39.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+# 国内网络加速：默认走清华 PyPI 镜像（pypi.org 直连慢/易超时）
+# 海外或 CI 环境可删除本段，或用环境变量 UV_INDEX_URL 覆盖
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+# Docker(Linux) 构建用 CPU 版 torch：PyPI 的 linux 轮子捆绑数 GB CUDA 依赖，
+# 本项目 CLIP 只需 CPU 推理；Windows 开发机不受影响（marker 仅 linux 命中）
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "platform_system == 'Linux'" }]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+    "integration: 需要真实 ComfyUI 实例与 M1 导出的工作流模板",
+]

@@ -1,0 +1,259 @@
+{
+ "10": {
+  "inputs": {
+   "ckpt_name": "dreamshaper_8.safetensors"
+  },
+  "class_type": "CheckpointLoaderSimple",
+  "_meta": {
+   "title": "加载 SD1.5 模型"
+  }
+ },
+ "11": {
+  "inputs": {
+   "text": "masterpiece, best quality, interior design rendering, modern living room, warm lighting",
+   "clip": [
+    "10",
+    1
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "提示词 (Input)"
+  }
+ },
+ "12": {
+  "inputs": {
+   "text": "watermark, text, signature, blurry, low quality, distorted, ugly",
+   "clip": [
+    "10",
+    1
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "负面词 (Input)"
+  }
+ },
+ "13": {
+  "inputs": {
+   "image": "lineart.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "线稿 (Input)"
+  }
+ },
+ "14": {
+  "inputs": {
+   "image": [
+    "13",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": 512,
+   "height": 512,
+   "crop": "center"
+  },
+  "class_type": "ImageScale",
+  "_meta": {
+   "title": "线稿缩放 512"
+  }
+ },
+ "15": {
+  "inputs": {
+   "value": 1.0,
+   "width": 512,
+   "height": 512
+  },
+  "class_type": "SolidMask",
+  "_meta": {
+   "title": "全白蒙版"
+  }
+ },
+ "16": {
+  "inputs": {
+   "brushnet": "diffusion_pytorch_model.safetensors",
+   "dtype": "float16"
+  },
+  "class_type": "BrushNetLoader",
+  "_meta": {
+   "title": "加载 BrushNet"
+  }
+ },
+ "17": {
+  "inputs": {
+   "model": [
+    "10",
+    0
+   ],
+   "vae": [
+    "10",
+    2
+   ],
+   "image": [
+    "14",
+    0
+   ],
+   "mask": [
+    "15",
+    0
+   ],
+   "brushnet": [
+    "16",
+    0
+   ],
+   "positive": [
+    "11",
+    0
+   ],
+   "negative": [
+    "12",
+    0
+   ],
+   "scale": 1.0,
+   "start_at": 0,
+   "end_at": 10000
+  },
+  "class_type": "BrushNet",
+  "_meta": {
+   "title": "BrushNet 上色"
+  }
+ },
+ "18": {
+  "inputs": {
+   "image": "depth.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "深度图 (Input)"
+  }
+ },
+ "19": {
+  "inputs": {
+   "control_net_name": "control_v11f1p_sd15_depth.pth"
+  },
+  "class_type": "ControlNetLoader",
+  "_meta": {
+   "title": "加载深度 ControlNet"
+  }
+ },
+ "20": {
+  "inputs": {
+   "conditioning": [
+    "17",
+    1
+   ],
+   "control_net": [
+    "19",
+    0
+   ],
+   "image": [
+    "18",
+    0
+   ],
+   "strength": 0.4
+  },
+  "class_type": "ControlNetApply",
+  "_meta": {
+   "title": "深度条件 0.4"
+  }
+ },
+ "22": {
+  "inputs": {
+   "model": [
+    "17",
+    0
+   ],
+   "seed": 42,
+   "steps": 20,
+   "cfg": 7.0,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "karras",
+   "positive": [
+    "26",
+    0
+   ],
+   "negative": [
+    "17",
+    2
+   ],
+   "latent_image": [
+    "17",
+    3
+   ],
+   "denoise": 1.0
+  },
+  "class_type": "KSampler",
+  "_meta": {
+   "title": "采样"
+  }
+ },
+ "23": {
+  "inputs": {
+   "samples": [
+    "22",
+    0
+   ],
+   "vae": [
+    "10",
+    2
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE 解码"
+  }
+ },
+ "24": {
+  "inputs": {
+   "control_net_name": "control_v11p_sd15_mlsd.pth"
+  },
+  "class_type": "ControlNetLoader",
+  "_meta": {
+   "title": "control_v11p_sd15_mlsd 加载"
+  }
+ },
+ "25": {
+  "inputs": {
+   "image": "mlsd.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "SD15 图 (Input)"
+  }
+ },
+ "26": {
+  "inputs": {
+   "conditioning": [
+    "20",
+    0
+   ],
+   "control_net": [
+    "24",
+    0
+   ],
+   "image": [
+    "25",
+    0
+   ],
+   "strength": 0.7
+  },
+  "class_type": "ControlNetApply",
+  "_meta": {
+   "title": "条件应用 0.7"
+  }
+ },
+ "27": {
+  "inputs": {
+   "images": [
+    "23",
+    0
+   ],
+   "filename_prefix": "result"
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "效果图 (Output)"
+  }
+ }
+}

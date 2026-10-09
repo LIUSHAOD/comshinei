@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# 环境
+.env
+
+# 运行时数据（上传 / 产出图片）
+backend/data/
+data/

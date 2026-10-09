@@ -1,0 +1,84 @@
+name: comshinei
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: comshinei
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # 镜像内只有 bash（无 curl/wget），用 /dev/tcp 探测端口监听
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+    env_file: ../backend/.env   # 本地开发配置（LLM key 等敏感项唯一来源，gitignore）
+    environment:
+      # compose 网络覆盖：基础设施用服务名；ComfyUI 裸机经 host.docker.internal
+      DATABASE_URL: mysql+pymysql://root:root@mysql:3306/comshinei?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      COMFYUI_HOST: http://host.docker.internal:8188
+      HF_ENDPOINT: https://hf-mirror.com
+      # 国内网络：xet CDN（cas-bridge.xethub.hf.co）不稳定，强制走镜像的经典下载路径
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      - backend_data:/app/data
+      - hf_cache:/root/.cache/huggingface   # CLIP 模型缓存，免每次重建重下
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  qdrant_data:
+  backend_data:
+  hf_cache:

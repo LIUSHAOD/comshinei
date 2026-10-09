@@ -1,0 +1,118 @@
+{
+ "1": {
+  "inputs": {
+   "image": "photo.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "实拍图 (Input)"
+  }
+ },
+ "2": {
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "coarse": "disable",
+   "resolution": 512
+  },
+  "class_type": "LineArtPreprocessor",
+  "_meta": {
+   "title": "线稿提取"
+  }
+ },
+ "3": {
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ],
+   "filename_prefix": "lineart"
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "线稿 (Output)"
+  }
+ },
+ "4": {
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "score_threshold": 0.1,
+   "dist_threshold": 0.1,
+   "resolution": 512
+  },
+  "class_type": "M-LSDPreprocessor",
+  "_meta": {
+   "title": "结构线提取"
+  }
+ },
+ "5": {
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ],
+   "filename_prefix": "mlsd"
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "结构线 (Output)"
+  }
+ },
+ "6": {
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "resolution": 512
+  },
+  "class_type": "Zoe-DepthMapPreprocessor",
+  "_meta": {
+   "title": "深度图提取"
+  }
+ },
+ "7": {
+  "inputs": {
+   "images": [
+    "6",
+    0
+   ],
+   "filename_prefix": "depth"
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "深度图 (Output)"
+  }
+ },
+ "8": {
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "resolution": 512
+  },
+  "class_type": "OneFormer-ADE20K-SemSegPreprocessor",
+  "_meta": {
+   "title": "语义分割提取"
+  }
+ },
+ "9": {
+  "inputs": {
+   "images": [
+    "8",
+    0
+   ],
+   "filename_prefix": "seg"
+  },
+  "class_type": "SaveImage",
+  "_meta": {
+   "title": "分割图 (Output)"
+  }
+ }
+}
