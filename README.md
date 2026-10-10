@@ -1,136 +1,106 @@
 # Comshinei — 室内设计 Agent
 
-技术栈：Vue3 + FastAPI + LangGraph + MySQL + Redis + Qdrant + ComfyUI（裸机）。详见上级目录《开发计划.md》。
+上传一张实拍房照片 + 一句中文装修需求，自动完成 **结构理解（线稿/深度/结构线）→ 风格图检索推荐 → 选图确认 → LLM 生成提示词 → ComfyUI 条件生图 → 效果图**，全程 SSE 实时推送进度。
 
-## 当前进度
+技术栈：Vue3 + FastAPI + LangGraph + MySQL + Redis + Qdrant + ComfyUI（裸机）。
 
-- **M2 后端骨架**：uv 工程、config、db/redis 连接、models + alembic 迁移（含 `comfy_workflows` 表）、storage 路径管理、移植自 Muse-Studio 的 `ComfyUIRunner`（HTTP 轮询 + 媒体预上传）与 `workflow_parse`（(Input)/(Output) 后缀解析 + patch_workflow 参数注入）、工作流模板注册接口。
-- **M3 LangGraph 阶段 1**：DesignState、`parse → [lineart ∥ retrieve] → gate` 图、Queue+emit 进度传送带（事件落 Redis，SSE 端点纯读 Redis，支持断线重连回放）、CLIP+Qdrant 检索（must_not exclude）、`POST /projects`（multipart 上传实拍图+需求）、`GET /projects/{id}`（刷新恢复现场）、`GET /projects/{id}/stream`（SSE）、`POST /projects/{id}/requery`（重查）、`GET /api/images/{ref}`（图片访问）。
-- **M4 风格库管理**：`POST /api/styles`（批量上传，入库即向量化：落盘 → CLIP 批量编码 → Qdrant 批量 upsert → MySQL 元数据落行，逐文件容错）、`GET /api/styles`（分页列表）、`DELETE /api/styles/{id}`（同步删 Qdrant 点 + 文件 + 行）。验收：50 张图上传后检索 top-1 命中正确色系。
-- **M5 LangGraph 阶段 2**：`prompt → generate → assemble` 子图、prompt_node（LLM 中文需求→英文 SD 提示词，Langfuse 可选观测）、generate_node（BrushNet 工作流注入 + 全局锁）、`POST /projects/{id}/confirm`（状态恢复续跑）、`POST /projects/{id}/cancel`（ComfyUI interrupt + 阶段回退）。事件流按阶段/按次自包含（confirm/requery 清空旧事件缓冲）；error 事件分 fatal/非 fatal，SSE 不被节点级非致命错误打断。
-- **M6 前端**：Vue3 + TS + Pinia + vue-router + axios，CreateView / DesignView / GalleryView 三页、useSSE 断线重连（终态自动 close）、按 stage 恢复现场、重新查询/确认生成/取消/批量风格库管理。`cd frontend && npm install && npm run dev`（代理 /api→8000）。
-- **M7 清理 + 部署**：cleanup_service（TTL 超龄项目连锅端 + Qdrant 孤儿点对账 + cleanup_rules 记录）、APScheduler 每 24h 随 backend 启动、`POST /api/cleanup/run` 手动触发、`DELETE /projects/{id}`；deploy/ 下 docker-compose + backend/frontend Dockerfile + nginx（/api 反代、SSE 关缓冲、SPA 回退）。
+详细架构与流程见 [介绍.md](介绍.md)，测试说明见 [测试.md](测试.md)，开发计划见上级目录《开发计划.md》。
 
-## 部署（docker compose）
+## 功能一览
+
+- **项目主流程**：`POST /projects` 创建（multipart 上传）→ 阶段 1 并行图 `parse → [lineart ∥ retrieve] → gate` → 用户选风格 → `confirm` 续跑阶段 2 `prompt → generate → assemble` → 效果图
+- **SSE 进度流**：事件真相存 Redis（seq 单调、封顶 200、TTL 24h），断线带 `Last-Event-ID` 自动续传；按阶段/按次自包含，error 分 fatal/非 fatal
+- **风格检索**：CLIP（clip-ViT-B-32）+ Qdrant，`requery` 把已看候选累加进 exclude 集合换一批
+- **风格库管理**：批量上传即向量化（落盘 → 批量编码 → Qdrant → MySQL，逐文件容错）、分页、删除
+- **工作流即数据**：ComfyUI 模板存库，按 `(Input)/(Output)` 标题后缀解析动态参数，新增工作流零代码
+- **任务控制**：取消（ComfyUI `/interrupt` + 阶段回退）、删除（连锅端）、TTL 定时清理 + Qdrant 孤儿对账（APScheduler）
+- **前端三页**：CreateView（上传需求）/ DesignView（进度+选图+结果）/ GalleryView（风格库）
+
+## 部署（docker compose 一键全栈）
 
 ```bash
 cd deploy
-docker compose up -d --build     # 一键起全栈（mysql/redis/qdrant/backend/frontend）
-# 前端 http://localhost  后端 http://localhost:8000/docs
+docker compose up -d --build
+# 前端 http://localhost   后端 API 文档 http://localhost:8000/docs
 # ComfyUI 裸机不在 compose 内，backend 经 host.docker.internal:8188 连接
 # LLM key 等敏感项读 ../backend/.env（gitignore，唯一来源）；基础设施地址由 compose environment 覆盖
 ```
 
-镜像构建要点：Linux 用 CPU 版 torch（pyproject `[[tool.uv.index]] pytorch-cpu` + `[tool.uv.sources]`，
-免数 GB CUDA 依赖）；pip/uv/npm 均走国内镜像加速。
+镜像构建要点：Linux 用 CPU 版 torch（pyproject `[[tool.uv.index]] pytorch-cpu` + `[tool.uv.sources]`，免数 GB CUDA 依赖）；pip/uv/npm 均走国内镜像加速。
 
-## 全链验收事件序列
-
-```
-POST /projects     → stage_change(lineart) → progress → lineart_done → candidates → stage_change(selecting) → completed
-POST confirm       → stage_change(prompting) → progress(LLM 提示词) → stage_change(generating) → progress → image_done → stage_change(done) → completed
-POST requery       → candidates(新一批) → completed
-```
-
-> **中文检索限制（计划 §11 风险）**：首版 clip-ViT-B-32 是英文模型，中文需求文本直接检索
-> 近邻质量差（实测中文查询不排序，英文 top-1 命中且 margin 清晰）。预留换 Chinese-CLIP
-> （权重已缓存于本机 HF cache）：改编码模型与 collection 即可，`ClipService` 是统一出入口。
-> 临时对策：M5 的 prompt_node 可先把中文需求翻成英文检索词。
-
-## M3 端到端流程
+## 本地开发
 
 ```bash
-# 0. 依赖服务：ComfyUI（裸机）+ Redis/Qdrant（Docker）
-docker start comshinei-redis comshinei-qdrant
-
-# 1. 风格图种子入库（真实风格图目录；测试可用 scripts 生成的样例图）
-cd backend && uv run python ../scripts/import_styles.py <风格图目录>
-
-# 2. 启动后端后创建项目（multipart）
-curl -X POST http://127.0.0.1:8000/api/projects \
-  -F "photo=@D:/photos/room.jpg" -F "requirements=北欧风客厅，暖色调"
-
-# 3. 监听 SSE 进度（断线重连带 Last-Event-ID 自动续传）
-curl -N http://127.0.0.1:8000/api/projects/<id>/stream
-# 事件序列：stage_change(lineart) → lineart_done ∥ candidates → stage_change(selecting) → completed
-
-# 4. 重查（exclude 累加，新候选不含已看）
-curl -X POST http://127.0.0.1:8000/api/projects/<id>/requery
-
-# 5. 刷新恢复现场
-curl http://127.0.0.1:8000/api/projects/<id>
-```
-
-## 快速开始（backend）
-
-```bash
+# 后端
 cd backend
-cp ../.env.example .env        # 默认 COMFYUI_HOST=127.0.0.1:8188，一般不用改
-uv sync                        # 安装依赖（uv 管理；已执行过则秒过）
-```
+cp ../.env.example .env        # 按需填 LLM_API_KEY；COMFYUI_HOST 默认 127.0.0.1:8188
+uv sync
 
-数据库二选一：
-
-```bash
-# A. 快速试（零依赖，sqlite 兜底，仅建议本地联调用）
-#    Windows Git Bash / Linux:
+# 数据库二选一：
+# A. sqlite 兜底（零依赖，仅本地联调）：
 DATABASE_URL="sqlite:///./data/dev.db" uv run uvicorn app.main:app --reload --port 8000
+# B. MySQL 正式（先建 utf8mb4 的 comshinei 库、配好 .env）：
+uv run alembic upgrade head && uv run uvicorn app.main:app --reload --port 8000
 
-# B. 正式（MySQL，与部署一致）
-#    先起 MySQL 8 并建好 comshinei 库（utf8mb4），.env 里配 DATABASE_URL，然后：
-uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --port 8000
+# 前端（另开终端）
+cd frontend && npm install && npm run dev   # http://localhost:5173，/api 代理到 8000
 ```
 
-> 建表双轨说明：启动时会 `create_all` 兜底建表（DB 未起不阻断）；若库从未被 alembic
-> 管理（无 alembic_version 记录），建表后自动盖章到当前最新迁移，之后跑
-> `alembic upgrade head` 为幂等空操作，两条路径不冲突。
+> 建表双轨说明：启动时 `create_all` 兜底建表（DB 未起不阻断）；若库从未被 alembic
+> 管理，建表后自动盖章到当前最新迁移，之后 `alembic upgrade head` 为幂等空操作。
 
-启动后：
+启动后入口：
 
-- Swagger 交互式接口文档（无前端时的主要测试入口）：<http://127.0.0.1:8000/docs>
+- Swagger 接口文档：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/health>
 
-## 无前端测试接口的三条路
+## 联调 / 验收
 
-1. **浏览器 Swagger UI**：打开 `/docs`，依次试 `GET /api/comfy/ping` →
-   `POST /api/workflows`（json 字段粘贴导出的 API JSON）→ `POST /api/comfy/run`。
+```bash
+# 1. 依赖服务：ComfyUI（裸机）+ Redis/Qdrant（Docker）
+docker start comshinei-redis comshinei-qdrant
 
-2. **注册脚本 + curl**：
+# 2. 注册工作流模板 + 风格图种子入库
+python scripts/register_workflows.py
+cd backend && uv run python ../scripts/import_styles.py <风格图目录>
 
-   ```bash
-   # 把 M1 导出的两条工作流注册进 comfy_workflows 表（打印解析出的 inputs/outputs）
-   python scripts/register_workflows.py
+# 3. 跑测试：72 单测（无外部依赖）+ 5 集成测试（真服务，不可达自动 skip）
+uv run pytest                      # 单测
+uv run pytest -m integration -v    # 集成
+```
 
-   # 直调 ComfyUI 跑 lineart（图片输入填本地绝对路径，自动预上传）
-   curl -X POST http://127.0.0.1:8000/api/comfy/run \
-     -H "Content-Type: application/json" \
-     -d '{"workflow_key": "lineart", "input_values": {"实拍图": "D:/photos/room.jpg"}}'
-   # → data.outputs: {"线稿": "...png", "结构线": ..., "深度图": ..., "分割图": ...}
-   #   产物落盘 backend/data/outputs/debug/<时间戳>/
-   ```
+全链验收事件序列：
 
-3. **pytest 集成测试**：`cd backend && uv run pytest -m integration -v`
-   （用 tests/fixtures/ 里的真实模板跑通 lineart→generate 全链）
-   单测（无需外部服务）：`uv run pytest`
+```
+POST /projects → stage_change(lineart) → progress → lineart_done ∥ candidates → stage_change(selecting) → completed
+POST confirm   → stage_change(prompting) → progress(LLM) → stage_change(generating) → progress → image_done → stage_change(done) → completed
+POST requery   → candidates(新一批) → completed
+```
+
+手动验收的 curl 全流程见 [测试.md](测试.md#六手动端到端验收无前端-curl-版)。
 
 ## 目录
 
 ```
-backend/
-├── app/
-│   ├── main.py            # FastAPI 入口（CORS / 中间件 / 异常处理 / 路由）
-│   ├── config.py          # pydantic-settings 读取 .env
-│   ├── api/v1/            # workflows 模板注册 / comfy 直调（M2）；projects/search/stream 待 M3-M5
-│   ├── services/          # comfy.py（ComfyUIRunner）/ workflow_parse.py
-│   ├── models/            # SQLAlchemy ORM（projects/style_images/comfy_workflows/cleanup_rules）
-│   ├── repositories/      # 数据访问层
-│   ├── db/                # MySQL engine / Redis 连接
-│   ├── storage/paths.py   # uploads / outputs 统一路径管理
-│   ├── middleware/        # 全局异常、请求日志
-│   └── utils/
-├── alembic/               # 数据库迁移
-└── tests/                 # 单测 + 真 ComfyUI 集成测试
-scripts/
-└── register_workflows.py  # 注册 M1 导出的工作流模板到后端
+comshinei/
+├── README.md / 介绍.md / 测试.md
+├── deploy/                      # docker compose 全栈 + nginx（SSE 关缓冲、SPA 回退）
+├── scripts/                     # register_workflows.py / import_styles.py
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI 入口（建表/盖章/Redis/APScheduler）
+│   │   ├── config.py            # pydantic-settings
+│   │   ├── api/v1/              # projects/search/stream/styles/workflows/comfy/images/cleanup
+│   │   ├── runtime/             # LangGraph：state/graph/nodes/runner/store
+│   │   ├── services/            # comfy / workflow_parse / clip / prompt / cleanup
+│   │   ├── models/ repositories/ db/ storage/ middleware/ utils/
+│   ├── alembic/                 # 数据库迁移
+│   └── tests/                   # 72 单测 + 5 集成测试
+└── frontend/                    # Vue3 SPA（CreateView / DesignView / GalleryView）
 ```
+
+## 已知限制
+
+- **中文检索**：clip-ViT-B-32 是英文模型，中文需求直接检索近邻质量差（实测中文不排序、英文 top-1 命中且 margin 清晰）。预留换 Chinese-CLIP：`ClipService` 是统一出入口，改编码模型与 collection 即可
+- **生图串行**：8G 显存约束，生图节点全局锁 + ComfyUI 队列串行，并发项目排队
+- **风格注入**：选中风格图目前只影响检索与展示，生图风格主要靠提示词；IPAdapter 注入为预留项
